@@ -1,28 +1,19 @@
-#![allow(warnings)]
-
 use self::file_db::FileDbWriter;
-use ahash::{HashMap, HashSet};
-use aho_corasick::{AhoCorasick, MatchKind};
-use anyhow::{anyhow, Result};
+use ahash::HashMap;
+use anyhow::Result;
 use file_db::FileDbReader;
 use genanki_rs::{Deck, Field, Model, ModelType, Note, Template};
-use indexical::{
-  define_index_type,
-  map::{DenseRefIndexMap, SparseRefIndexMap},
-  IndexedDomain, IndexicalIteratorExt,
-};
+use indexical::{define_index_type, map::DenseRefIndexMap, IndexedDomain};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
-use itertools::Itertools;
 use jieba_rs::Jieba;
 use rand::{seq::SliceRandom, thread_rng};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
   fs::File,
-  io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-  ops::{Range, RangeInclusive},
-  path::Path,
-  sync::{LazyLock, OnceLock},
+  io::{BufRead, BufReader},
+  ops::Range,
+  sync::LazyLock,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -87,9 +78,8 @@ fn read_hsk() -> Result<Hsk> {
     .map(|level| {
       let level_phrases = phrases
         .iter_enumerated()
-        .filter_map(|(idx, phrase)| {
-          (phrase.level == level).then(|| (phrase.simplified.clone(), idx))
-        })
+        .filter(|(_, phrase)| phrase.level == level)
+        .map(|(idx, phrase)| (phrase.simplified.clone(), idx))
         .collect::<HashMap<_, _>>();
       (level, level_phrases)
     })
@@ -116,7 +106,7 @@ fn progress_bar(count: usize) -> ProgressBar {
 }
 
 fn split_sentences(text: &'_ str) -> Vec<&'_ str> {
-  const RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[。！？]+").unwrap());
+  static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[。！？]+").unwrap());
   RE.split(text)
     .filter(|s| !s.is_empty())
     .map(|s| s.trim())
@@ -125,11 +115,6 @@ fn split_sentences(text: &'_ str) -> Vec<&'_ str> {
 
 const SCORE_THRESHOLD: f64 = 0.8;
 const LEN_THRESHOLD: usize = 10;
-
-struct SentenceDesc {
-  level: HskLevel,
-  phrases: Vec<PhraseIdx>,
-}
 
 impl Hsk {
   fn analyze<'a>(&'a self, words: &'a [&str]) -> Option<impl Iterator<Item = PhraseIdx> + 'a> {
@@ -175,7 +160,7 @@ fn build_corpus(hsk: &'_ Hsk) -> Result<PhraseFileIndex<'_>> {
     for line_res in file.lines().take(100000) {
       let line = line_res?;
       let entry: CorpusEntry = serde_json::from_str(&line)?;
-      if entry.score < 0.8 {
+      if entry.score < SCORE_THRESHOLD {
         continue;
       }
 
@@ -240,7 +225,7 @@ fn build_corpus(hsk: &'_ Hsk) -> Result<PhraseFileIndex<'_>> {
 
 const MODEL_ID: i64 = 1122338855;
 
-const MODEL: LazyLock<Model> = LazyLock::new(|| {
+static MODEL: LazyLock<Model> = LazyLock::new(|| {
   Model::new_with_options(
     MODEL_ID,
     "Cloze (zhlearn)",
@@ -285,7 +270,7 @@ const MODEL: LazyLock<Model> = LazyLock::new(|| {
 
 fn make_cloze(sentence: &str, phrase: &str, loc: usize) -> String {
   let mut sentence = sentence.to_string();
-  let mut hole = format!("{{{{c1::{phrase}}}}}");
+  let hole = format!("{{{{c1::{phrase}}}}}");
   sentence.replace_range(loc..loc + phrase.len(), &hole);
   sentence
 }
@@ -297,7 +282,7 @@ fn build_card(snippet: &Snippet, phrase: &str) -> Note {
     .enumerate()
     .find_map(|(i, s)| Some((i, s.find(phrase)?)))
     .unwrap();
-  let cloze = make_cloze(&sentences[i], phrase, loc);
+  let cloze = make_cloze(sentences[i], phrase, loc);
   Note::new(
     MODEL.clone(),
     vec![

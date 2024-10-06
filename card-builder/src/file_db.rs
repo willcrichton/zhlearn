@@ -25,7 +25,7 @@ impl FileDbWriter {
   pub fn write<T: Serialize>(&mut self, obj: &T) -> Result<Range<u64>> {
     self.buf.clear();
     serde_json::to_writer(&mut self.buf, obj)?;
-    self.writer.write(&self.buf)?;
+    self.writer.write_all(&self.buf)?;
 
     let start = self.byte_pos;
     let len = u64::try_from(self.buf.len()).unwrap();
